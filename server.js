@@ -1962,6 +1962,47 @@ cache(function(data, match, sendBadge, request) {
   });
 }));
 
+// GitHub tag integration, semver only
+camp.route(/^\/github\/tag-semver\/([^\/]+)\/([^\/]+)\.(svg|png|gif|jpg|json)$/,
+cache(function(data, match, sendBadge, request) {
+  var user = match[1];  // eg, strongloop/express
+  var repo = match[2];
+  var format = match[3];
+  var apiUrl = 'https://api.github.com/repos/' + user + '/' + repo + '/tags';
+  // Using our OAuth App secret grants us 5000 req/hour
+  // instead of the standard 60 req/hour.
+  if (serverSecrets) {
+    apiUrl += '?client_id=' + serverSecrets.gh_client_id
+      + '&client_secret=' + serverSecrets.gh_client_secret;
+  }
+  var badgeData = getBadgeData('tag', data);
+  // A special User-Agent is required:
+  // http://developer.github.com/v3/#user-agent-required
+  request(apiUrl, { headers: githubHeaders }, function(err, res, buffer) {
+    if (err != null) {
+      badgeData.text[1] = 'inaccessible';
+      sendBadge(format, badgeData);
+    }
+    try {
+      if ((+res.headers['x-ratelimit-remaining']) === 0) {
+        return;  // Hope for the best in the cache.
+      }
+      var data = JSON.parse(buffer);
+      var tags = getValidSemverTags(data);
+      tags.sort(semverComparator);
+
+      var vdata = versionColor(tags[0].name);
+      badgeData.text[1] = vdata.version;
+      badgeData.colorscheme = vdata.color;
+      sendBadge(format, badgeData);
+
+    } catch(e) {
+      badgeData.text[1] = 'none';
+      sendBadge(format, badgeData);
+    }
+  });
+}));
+
 // GitHub release integration.
 camp.route(/^\/github\/release\/([^\/]+)\/([^\/]+)\.(svg|png|gif|jpg|json)$/,
 cache(function(data, match, sendBadge, request) {
@@ -3588,4 +3629,21 @@ function phpStableVersion(version) {
   }
   // normal or patch
   return (versionData.modifier === 3) || (versionData.modifier === 4);
+}
+
+// Return an array of all objects containing valid semver tags
+function getValidSemverTags(tags) {
+	var arr = [];
+	for (var tag in tags) {
+		if (semver.valid(tags[tag]['name'])) {
+			arr.push(tags[tag]);
+		}
+	}
+	return arr;
+}
+
+// Comparator function for sorting a semver tag array with the newest
+// tag first.
+function semverComparator(verA, verB) {
+	return semver.compare(verB['name'], verA['name'])
 }
